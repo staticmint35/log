@@ -225,17 +225,16 @@ def save_normalized_config():
     """Chuẩn hóa dictionary thành cấu trúc đã sắp xếp và lưu đè ra file txt (Bao gồm cả balance_want)"""
     for i in range(11):
         sorted_items = get_sorted_unique_token_amounts(i)
-        # Re-build lại dict để ép Python duy trì cấu trúc sorted
         token_amounts_map[i] = { (token,): amount for token, amount in sorted_items }
 
-    # Lấy thời gian hiện tại theo múi giờ Việt Nam
     tz = pytz.timezone('Asia/Ho_Chi_Minh')
     current_time = datetime.now(tz).strftime('%Y-%m-%d %H:%M:%S')
     
-    # Trích xuất balance_want hiện tại của tất cả tài khoản
     balance_wants_to_save = {i: accounts[i]['balance_want'] for i in range(11)}
+    
+    # --- THÊM DÒNG NÀY ĐỂ LẤY POS_SIZE CỦA CÁC ACC ---
+    pos_sizes_to_save = {i: accounts[i]['pos_size_usdt'] for i in range(11)}
 
-    # Format thời gian ngủ đông thành chuỗi chữ để lưu
     resume_time_str = resume_auto_open_time.strftime('%Y-%m-%d %H:%M:%S') if resume_auto_open_time else 'None'
 
     with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
@@ -245,6 +244,10 @@ def save_normalized_config():
         f.write(f"# last_token: {last_token}\n")
         f.write(f"# dca: {dca}\n")
         f.write(f"# balance_wants: {balance_wants_to_save}\n")
+        
+        # --- THÊM DÒNG NÀY ĐỂ GHI POS_SIZE VÀO FILE ---
+        f.write(f"# pos_sizes: {pos_sizes_to_save}\n")
+        
         f.write(f"# last_auto_open_run: {last_auto_open_run}\n")
         f.write(f"# resume_auto_open_time: {resume_time_str}\n")
         f.write(f"# dca_target_offset: {dca_target_offset}\n")
@@ -317,6 +320,15 @@ if os.path.exists(CONFIG_FILE):
                         print("Đã tải balance_want từ file.")
                     except Exception as e:
                         print("Lỗi load balance_wants:", e)
+                # 5.5 Khôi phục Pos Size USDT
+                elif line.startswith("# pos_sizes:"):
+                    try:
+                        ps_dict = ast.literal_eval(line.split(":", 1)[1].strip())
+                        for idx, ps in ps_dict.items():
+                            accounts[int(idx)]['pos_size_usdt'] = float(ps)
+                        print("Đã tải pos_size_usdt từ file.")
+                    except Exception as e:
+                        print("Lỗi load pos_sizes:", e)
                 
                 # --- ĐOẠN THÊM MỚI ---
                 # 6. Khôi phục phút chạy cuối cùng
@@ -506,8 +518,61 @@ HTML_TEMPLATE = """
   <span id="updateBWMsg" style="margin-left: 10px; font-weight: bold;"></span>
 </div>
 
+<div class="update-form">
+  <h3>Cập nhật Position Size (pos_size_usdt)</h3>
+  <label for="accIndexPS">Tài khoản:</label>
+  <select id="accIndexPS">
+    {% for i in range(11) %}
+      <option value="{{ i }}">{{ accounts[i].name }} (Hiện tại: {{ accounts[i].pos_size_usdt }})</option>
+    {% endfor %}
+  </select>
+  <br>
+  <label for="newPosSizeData" style="display:block; margin-top:10px;">Nhập Pos Size mới (USDT):</label>
+  <input type="number" id="newPosSizeData" step="0.1" placeholder="Ví dụ: 5.5" style="width: 100%; font-family: monospace; margin-top: 5px; padding: 8px; border: 1px solid #ccc; border-radius: 3px; box-sizing: border-box;" />
+  <br>
+  <button type="button" class="btn-confirm" onclick="updatePosSize()" style="margin-top: 15px;">Cập nhật Pos Size</button>
+  <span id="updatePSMsg" style="margin-left: 10px; font-weight: bold;"></span>
+</div>
+
 <script>
 let currentPayload = null;
+
+function updatePosSize() {
+    const accIndex = document.getElementById("accIndexPS").value;
+    const newPosSize = document.getElementById("newPosSizeData").value;
+    const msg = document.getElementById("updatePSMsg");
+
+    if(!newPosSize.trim()) {
+        msg.style.color = "red";
+        msg.innerText = "Vui lòng nhập số Pos Size mới!";
+        return;
+    }
+
+    msg.style.color = "blue";
+    msg.innerText = "Đang tiến hành cập nhật...";
+
+    fetch("/update_pos_size", {
+        method: "POST",
+        headers: { "Accept": "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ "accIndex": accIndex, "newPosSize": newPosSize })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if(data.success) {
+            msg.style.color = "green";
+            msg.innerText = "Cập nhật thành công! Đang tải lại...";
+            setTimeout(() => location.reload(), 1000);
+        } else {
+            msg.style.color = "red";
+            msg.innerText = "Lỗi khi lưu: " + data.error;
+        }
+    })
+    .catch(err => {
+        msg.style.color = "red";
+        msg.innerText = "Lỗi kết nối máy chủ khi cập nhật!";
+        console.error(err);
+    });
+}
 
 function updateBalanceWant() {
     const accIndex = document.getElementById("accIndexBW").value;
@@ -2404,6 +2469,50 @@ def update_tokens():
 # === API ROUTE CẬP NHẬT BALANCE_WANT ===
 @app.route('/update_balance_want', methods=['POST'])
 def update_balance_want():
+    global previous_total_balance  # <--- Bổ sung biến global này
+    try:
+        if request.is_json:
+            data = request.get_json(silent=True)
+        else:
+            data = request.form.to_dict()
+            if not data and request.data:
+                data = json.loads(request.data.decode('utf-8'))
+
+        if not data:
+            return jsonify({"success": False, "error": "Máy chủ không nhận được dữ liệu."})
+
+        acc_idx = int(data.get('accIndex', -1))
+        new_balance_str = data.get('newBalance', '')
+
+        if acc_idx == -1 or str(new_balance_str).strip() == '':
+            return jsonify({"success": False, "error": "Thiếu Tài khoản hoặc Balance."})
+
+        new_balance = float(new_balance_str)
+
+        if new_balance < 0:
+            return jsonify({"success": False, "error": "Balance_want không được âm."})
+
+        # Cập nhật RAM
+        accounts[acc_idx]['balance_want'] = new_balance
+        
+        # --- RESET MỐC FLIP DCA ---
+        # Chặn bot hiểu nhầm hành động rút tiền/cập nhật target thành hụt vốn
+        previous_total_balance = None 
+        
+        # Lưu file
+        save_normalized_config()
+        
+        log(f"WEB UPDATE & SAVED | OKX_{acc_idx} balance_want changed to {new_balance} USDT. Reset DCA Flip reference.")
+        return jsonify({"success": True})
+
+    except ValueError:
+        return jsonify({"success": False, "error": "Giá trị nhập vào phải là số."})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
+# === API ROUTE CẬP NHẬT POS_SIZE_USDT ===
+@app.route('/update_pos_size', methods=['POST'])
+def update_pos_size():
     try:
         if request.is_json:
             data = request.get_json(silent=True)
@@ -2416,28 +2525,28 @@ def update_balance_want():
             return jsonify({"success": False, "error": "Máy chủ không nhận được dữ liệu (Payload rỗng)."})
 
         acc_idx = int(data.get('accIndex', -1))
-        new_balance_str = data.get('newBalance', '')
+        new_pos_size_str = data.get('newPosSize', '')
 
-        if acc_idx == -1 or str(new_balance_str).strip() == '':
-            return jsonify({"success": False, "error": "Dữ liệu gửi lên bị thiếu Tài khoản hoặc Balance."})
+        if acc_idx == -1 or str(new_pos_size_str).strip() == '':
+            return jsonify({"success": False, "error": "Dữ liệu gửi lên bị thiếu Tài khoản hoặc Pos Size."})
 
         # Chuyển đổi sang số thực
-        new_balance = float(new_balance_str)
+        new_pos_size = float(new_pos_size_str)
 
-        if new_balance < 0:
-            return jsonify({"success": False, "error": "Balance_want không được là số âm."})
+        if new_pos_size <= 0:
+            return jsonify({"success": False, "error": "Pos Size phải lớn hơn 0 USDT."})
 
         # Cập nhật RAM
-        accounts[acc_idx]['balance_want'] = new_balance
+        accounts[acc_idx]['pos_size_usdt'] = new_pos_size
         
-        # Cập nhật lại config text bằng hàm có sẵn
+        # Ghi đè vào file token_config.txt
         save_normalized_config()
         
-        log(f"WEB UPDATE & SAVED | OKX_{acc_idx} balance_want changed to {new_balance} USDT")
+        log(f"WEB UPDATE & SAVED | OKX_{acc_idx} pos_size_usdt changed to {new_pos_size} USDT")
         return jsonify({"success": True})
 
     except ValueError:
-        return jsonify({"success": False, "error": "Giá trị Balance nhập vào không hợp lệ (phải là số)."})
+        return jsonify({"success": False, "error": "Giá trị nhập vào không hợp lệ (phải là số)."})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
 
