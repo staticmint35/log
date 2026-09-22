@@ -11,7 +11,7 @@ import threading
 import pytz
 import sys
 import math  # Thêm thư viện math để xử lý làm tròn amount
-from pyngrok import ngrok
+#from pyngrok import ngrok
 
 # === CẤU HÌNH ===
 if sys.stdout.encoding != 'utf-8':
@@ -840,61 +840,111 @@ def is_cache_valid(cached):
     age = (datetime.now(pytz.timezone('Asia/Ho_Chi_Minh')) - cached['timestamp']).total_seconds()
     return age < CACHE_VALID_SECONDS
 
+# Bổ sung biến toàn cục này ở đâu đó đầu file (cùng chỗ với biến position_cache)
+global_contract_sizes = {}
+
 def fetch_fresh_data(account, account_index):
-    """Fetch balance + positions một lần, lưu vào cache"""
-    try:
-        exchange = ccxt.okx({
-            'apiKey': account['apiKey'],
-            'secret': account['secret'],
-            'password': account['password'],
-            'enableRateLimit': True,
-            'options': {
-                'defaultType': 'swap', 
-                'adjustForTimeDifference': True  # <--- BỔ SUNG DÒNG NÀY ĐỂ FIX LỖI 50102
-            }
-        })
-
-        balance_resp = exchange.fetch_balance(params={'type': 'swap'})
-        usdt_info = balance_resp.get('USDT', {})
-        usdt_balance = float(usdt_info.get('total', 0))
-        usdt_used = float(usdt_info.get('used', 0)) if usdt_info.get('used') else 0.0
-        usdt_available = usdt_balance - usdt_used
-
-        positions = exchange.fetch_positions(None, params={'type': 'swap'})
-
-        token_positions = {}
-        for pos in positions:
-            if float(pos.get('contracts', 0)) > 0:
-                token = extract_token(pos['symbol'])
-                # Bổ sung lưu contractSize trực tiếp từ API Response vào bộ nhớ
-                contract_size = float(pos.get('contractSize') or pos.get('info', {}).get('ctVal', 1))
-
-                token_positions.setdefault(token, []).append({
-                    'side': pos['side'],
-                    'entryPrice': float(pos['entryPrice']),
-                    'markPrice': float(pos.get('markPrice', pos['entryPrice'])),
-                    'pnl': float(pos.get('unrealizedPnl', 0)),
-                    'contracts': float(pos['contracts']),
-                    'contractSize': contract_size, # <-- Thêm dòng này để lưu vào cache
-                    'symbol': pos['symbol']
-                })
-
-        single = [(t, poss) for t, poss in token_positions.items() if len({p['side'] for p in poss}) == 1]
-        dual   = [(t, poss) for t, poss in token_positions.items() if len({p['side'] for p in poss}) == 2]
-
-        data = {
-            'balance': usdt_balance,
-            'available_balance': usdt_available,  # <--- BỔ SUNG DÒNG NÀY
-            'single': single,
-            'dual': dual,
-            'exchange': exchange,
-            'timestamp': datetime.now(pytz.timezone('Asia/Ho_Chi_Minh'))
+    """Trị dứt điểm lỗi NoneType bằng Raw API, tối ưu request để chống Ban IP tuyệt đối"""
+    global global_contract_sizes
+    max_retries = 3
+    
+    exchange = ccxt.okx({
+        'apiKey': account['apiKey'],
+        'secret': account['secret'],
+        'password': account['password'],
+        'enableRateLimit': True,
+        'options': {
+            'defaultType': 'swap', 
+            'adjustForTimeDifference': True
         }
-        position_cache[account_index] = data
-        return data
-    except Exception as e:
-        log(f"Fetch fresh data failed {account['name']}: {e}")
-        return None
+    })
+
+    for attempt in range(max_retries):
+        try:
+            # === 1. LẤY SỐ DƯ (RAW API) ===
+            bal_resp = exchange.private_get_account_balance()
+            usdt_balance = 0.0
+            usdt_available = 0.0
+            if bal_resp and 'data' in bal_resp and len(bal_resp['data']) > 0:
+                for detail in bal_resp['data'][0].get('details', []):
+                    if detail.get('ccy') == 'USDT':
+                        usdt_balance = float(detail.get('eq', 0))
+                        usdt_available = float(detail.get('availEq', 0))
+                        break
+
+            # === 2. LẤY HỆ SỐ HỢP ĐỒNG (TỐI ƯU REQUEST) ===
+            # Chỉ gọi API 1 lần duy nhất cho toàn bộ hệ thống, các acc sau dùng lại cache
+            if not global_contract_sizes:
+                try:
+                    inst_resp = exchange.public_get_public_instruments({'instType': 'SWAP'})
+                    if inst_resp and 'data' in inst_resp:
+                        for inst in inst_resp['data']:
+                            inst_id = inst.get('instId', '')
+                            ct_val = inst.get('ctVal', '1')
+                            global_contract_sizes[inst_id] = float(ct_val)
+                except Exception:
+                    pass
+
+            # === 3. LẤY VỊ THẾ ĐANG MỞ (RAW API) ===
+            pos_resp = exchange.private_get_account_positions({'instType': 'SWAP'})
+            token_positions = {}
+            
+            if pos_resp and 'data' in pos_resp:
+                for p in pos_resp['data']:
+                    contracts = float(p.get('pos', 0))
+                    if contracts == 0: continue
+                    
+                    instId = p.get('instId', '')
+                    if not instId: continue
+                    
+                    token = instId.split('-')[0]
+                    symbol = f"{token}/USDT:USDT"
+                    
+                    side = p.get('posSide', 'long').lower()
+                    if side == 'net': 
+                        side = 'long' if contracts > 0 else 'short'
+                    
+                    contracts = abs(contracts)
+                    entry_price = float(p.get('avgPx', 0))
+                    mark_price = float(p.get('markPx', entry_price))
+                    pnl = float(p.get('upl', 0))
+                    
+                    # Lấy hệ số từ biến lưu trữ chung
+                    contract_size = global_contract_sizes.get(instId, 1.0)
+                    
+                    token_positions.setdefault(token, []).append({
+                        'side': side,
+                        'entryPrice': entry_price,
+                        'markPrice': mark_price,
+                        'pnl': pnl,
+                        'contracts': contracts,
+                        'contractSize': contract_size,
+                        'symbol': symbol
+                    })
+                    
+            single = [(t, poss) for t, poss in token_positions.items() if len({p['side'] for p in poss}) == 1]
+            dual   = [(t, poss) for t, poss in token_positions.items() if len({p['side'] for p in poss}) == 2]
+
+            data = {
+                'balance': usdt_balance,
+                'available_balance': usdt_available,
+                'single': single,
+                'dual': dual,
+                'exchange': exchange, 
+                'timestamp': datetime.now(pytz.timezone('Asia/Ho_Chi_Minh'))
+            }
+            position_cache[account_index] = data
+            return data
+
+        except Exception as e:
+            if attempt < max_retries - 1:
+                time.sleep(2)
+                continue
+            else:
+                log(f"Fetch fresh data failed {account['name']} (Raw API): {e}")
+                return None
+                
+    return None
 
 def get_cached_or_fresh(account, idx, force=False):
     cached = position_cache.get(idx)
