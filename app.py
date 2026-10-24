@@ -143,15 +143,15 @@ is_first_run = False
 # === TÀI KHOẢN ===
 accounts = [
     {'apiKey': os.getenv('OKX_API_KEY_0'), 'secret': os.getenv('OKX_API_SECRET_0'), 'password': os.getenv('OKX_PASSWORD_0'), 'name': 'OKX_0', 'balance_want': 85, 'pos_size_usdt': 4.0},
-    {'apiKey': os.getenv('OKX_API_KEY_1'), 'secret': os.getenv('OKX_API_SECRET_1'), 'password': os.getenv('OKX_PASSWORD_1'), 'name': 'OKX_1', 'balance_want': 53, 'pos_size_usdt': 5.05},
+    {'apiKey': os.getenv('OKX_API_KEY_1'), 'secret': os.getenv('OKX_API_SECRET_1'), 'password': os.getenv('OKX_PASSWORD_1'), 'name': 'OKX_1', 'balance_want': 131, 'pos_size_usdt': 5.55},
     {'apiKey': os.getenv('OKX_API_KEY_2'), 'secret': os.getenv('OKX_API_SECRET_2'), 'password': os.getenv('OKX_PASSWORD_2'), 'name': 'OKX_2', 'balance_want': 245.5, 'pos_size_usdt': 4.0},
     {'apiKey': os.getenv('OKX_API_KEY_3'), 'secret': os.getenv('OKX_API_SECRET_3'), 'password': os.getenv('OKX_PASSWORD_3'), 'name': 'OKX_3', 'balance_want': 342.5, 'pos_size_usdt': 4.0},
-    {'apiKey': os.getenv('OKX_API_KEY_4'), 'secret': os.getenv('OKX_API_SECRET_4'), 'password': os.getenv('OKX_PASSWORD_4'), 'name': 'OKX_4', 'balance_want': 79, 'pos_size_usdt': 4.0},
+    {'apiKey': os.getenv('OKX_API_KEY_4'), 'secret': os.getenv('OKX_API_SECRET_4'), 'password': os.getenv('OKX_PASSWORD_4'), 'name': 'OKX_4', 'balance_want': 103, 'pos_size_usdt': 4.3},
     {'apiKey': os.getenv('OKX_API_KEY_5'), 'secret': os.getenv('OKX_API_SECRET_5'), 'password': os.getenv('OKX_PASSWORD_5'), 'name': 'OKX_5', 'balance_want': 82.5, 'pos_size_usdt': 4.0},
     {'apiKey': os.getenv('OKX_API_KEY_6'), 'secret': os.getenv('OKX_API_SECRET_6'), 'password': os.getenv('OKX_PASSWORD_6'), 'name': 'OKX_6', 'balance_want': 82, 'pos_size_usdt': 4.0},
     {'apiKey': os.getenv('OKX_API_KEY_7'), 'secret': os.getenv('OKX_API_SECRET_7'), 'password': os.getenv('OKX_PASSWORD_7'), 'name': 'OKX_7', 'balance_want': 276.5, 'pos_size_usdt': 4.0},
     {'apiKey': os.getenv('OKX_API_KEY_8'), 'secret': os.getenv('OKX_API_SECRET_8'), 'password': os.getenv('OKX_PASSWORD_8'), 'name': 'OKX_8', 'balance_want': 235.5, 'pos_size_usdt': 4.0},
-    {'apiKey': os.getenv('OKX_API_KEY_9'), 'secret': os.getenv('OKX_API_SECRET_9'), 'password': os.getenv('OKX_PASSWORD_9'), 'name': 'OKX_9', 'balance_want': 64, 'pos_size_usdt': 4.55},
+    {'apiKey': os.getenv('OKX_API_KEY_9'), 'secret': os.getenv('OKX_API_SECRET_9'), 'password': os.getenv('OKX_PASSWORD_9'), 'name': 'OKX_9', 'balance_want': 117, 'pos_size_usdt': 4.85},
     {'apiKey': os.getenv('OKX_API_KEY_10'), 'secret': os.getenv('OKX_API_SECRET_10'), 'password': os.getenv('OKX_PASSWORD_10'), 'name': 'OKX_10', 'balance_want': 165, 'pos_size_usdt': 4.0},
 ]
 
@@ -199,7 +199,54 @@ token_amounts_10 = {
     ('S',): 9.0,
 }
 
+
+
+
+
 token_amounts_map = {i: globals()[f'token_amounts_{i}'] for i in range(11)}
+
+
+# === BINANCE CACHE ===
+binance_cache = {
+    'total': 0.0, 
+    'available': 0.0, 
+    'used': 0.0, 
+    'last_update': 'Chưa lấy dữ liệu'
+}
+
+def fetch_binance_futures_balance_job():
+    """Hàm lấy dữ liệu Binance chạy ngầm mỗi 30 phút"""
+    global binance_cache
+    api_key = os.getenv('BINANCE_API_KEY')
+    api_secret = os.getenv('BINANCE_API_SECRET')
+    
+    if not api_key or not api_secret:
+        return
+
+    try:
+        binance = ccxt.binance({
+            'apiKey': api_key,
+            'secret': api_secret,
+            'enableRateLimit': True,
+            'options': {
+                'defaultType': 'future'
+            }
+        })
+        
+        balance_resp = binance.fetch_balance()
+        usdt_info = balance_resp.get('USDT', {})
+        
+        tz = pytz.timezone('Asia/Ho_Chi_Minh')
+        now = datetime.now(tz).strftime('%H:%M:%S')
+        
+        binance_cache['total'] = float(usdt_info.get('total', 0))
+        binance_cache['available'] = float(usdt_info.get('free', 0))
+        binance_cache['used'] = float(usdt_info.get('used', 0))
+        binance_cache['last_update'] = now
+        
+        log(f"🟡 Đã quét xong số dư Binance: {binance_cache['total']:.2f} USDT")
+    except Exception as e:
+        log(f"Lỗi lấy dữ liệu Binance Futures: {e}")
 
 # === LƯU TRỮ VÀ ĐỌC FILE CONFIG KHI KHỞI ĐỘNG ===
 CONFIG_FILE = 'token_config.txt'
@@ -225,17 +272,16 @@ def save_normalized_config():
     """Chuẩn hóa dictionary thành cấu trúc đã sắp xếp và lưu đè ra file txt (Bao gồm cả balance_want)"""
     for i in range(11):
         sorted_items = get_sorted_unique_token_amounts(i)
-        # Re-build lại dict để ép Python duy trì cấu trúc sorted
         token_amounts_map[i] = { (token,): amount for token, amount in sorted_items }
 
-    # Lấy thời gian hiện tại theo múi giờ Việt Nam
     tz = pytz.timezone('Asia/Ho_Chi_Minh')
     current_time = datetime.now(tz).strftime('%Y-%m-%d %H:%M:%S')
     
-    # Trích xuất balance_want hiện tại của tất cả tài khoản
     balance_wants_to_save = {i: accounts[i]['balance_want'] for i in range(11)}
+    
+    # --- THÊM DÒNG NÀY ĐỂ LẤY POS_SIZE CỦA CÁC ACC ---
+    pos_sizes_to_save = {i: accounts[i]['pos_size_usdt'] for i in range(11)}
 
-    # Format thời gian ngủ đông thành chuỗi chữ để lưu
     resume_time_str = resume_auto_open_time.strftime('%Y-%m-%d %H:%M:%S') if resume_auto_open_time else 'None'
 
     with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
@@ -245,6 +291,10 @@ def save_normalized_config():
         f.write(f"# last_token: {last_token}\n")
         f.write(f"# dca: {dca}\n")
         f.write(f"# balance_wants: {balance_wants_to_save}\n")
+        
+        # --- THÊM DÒNG NÀY ĐỂ GHI POS_SIZE VÀO FILE ---
+        f.write(f"# pos_sizes: {pos_sizes_to_save}\n")
+        
         f.write(f"# last_auto_open_run: {last_auto_open_run}\n")
         f.write(f"# resume_auto_open_time: {resume_time_str}\n")
         f.write(f"# dca_target_offset: {dca_target_offset}\n")
@@ -317,6 +367,15 @@ if os.path.exists(CONFIG_FILE):
                         print("Đã tải balance_want từ file.")
                     except Exception as e:
                         print("Lỗi load balance_wants:", e)
+                # 5.5 Khôi phục Pos Size USDT
+                elif line.startswith("# pos_sizes:"):
+                    try:
+                        ps_dict = ast.literal_eval(line.split(":", 1)[1].strip())
+                        for idx, ps in ps_dict.items():
+                            accounts[int(idx)]['pos_size_usdt'] = float(ps)
+                        print("Đã tải pos_size_usdt từ file.")
+                    except Exception as e:
+                        print("Lỗi load pos_sizes:", e)
                 
                 # --- ĐOẠN THÊM MỚI ---
                 # 6. Khôi phục phút chạy cuối cùng
@@ -462,6 +521,14 @@ HTML_TEMPLATE = """
         {% endif %}
     </div>
 
+    <!-- KHUNG BINANCE FUTURES -->
+    <div style="background: #fff3e0; padding: 15px; border-radius: 5px; border: 1px solid #ffe0b2; margin-bottom: 20px;">
+        <h2 style="margin-top: 0; color: #e65100;">🟡 BINANCE FUTURES</h2>
+        <h3 style="color: #e65100; margin: 5px 0;">Tổng ví (Total Balance): {{ binance_total|round(2) }} USDT</h3>
+        <h3 style="color: #2e7d32; margin: 5px 0;">Khả dụng (Available Balance): {{ binance_available|round(2) }} USDT</h3>
+        <h3 style="color: #d32f2f; margin: 5px 0;">Đã ký quỹ (Margin Used): {{ binance_used|round(2) }} USDT</h3>
+           <div style="font-size: 13px; color: #888; margin-top: 10px;">🕒 Cập nhật lần cuối: <b>{{ binance_last_update }}</b> (Tự động quét 30 phút/lần)</div>
+    </div>
 
     <h3 style="margin-top: 15px;">Ghi chú (Tự động lưu)</h3>
     <textarea id="customInput" style="width: 100%; height: 200px; padding: 10px; font-size: 16px;" placeholder="Nhập ghi chú vào đây..." oninput="saveTextArea()"></textarea>
@@ -490,8 +557,116 @@ HTML_TEMPLATE = """
   </div>
 </div>
 
+
+
+<div class="update-form">
+  <h3>Cập nhật Target Balance (balance_want)</h3>
+  <label for="accIndexBW">Tài khoản:</label>
+  <select id="accIndexBW">
+    {% for i in range(11) %}
+      <option value="{{ i }}">{{ accounts[i].name }} (Hiện tại: {{ accounts[i].balance_want }})</option>
+    {% endfor %}
+  </select>
+  <br>
+  <label for="newBalanceData" style="display:block; margin-top:10px;">Nhập Target Balance mới (USDT):</label>
+  <input type="number" id="newBalanceData" step="0.1" placeholder="Ví dụ: 150.5" style="width: 100%; font-family: monospace; margin-top: 5px; padding: 8px; border: 1px solid #ccc; border-radius: 3px; box-sizing: border-box;" />
+  <br>
+  <button type="button" class="btn-confirm" onclick="updateBalanceWant()" style="margin-top: 15px;">Cập nhật Balance</button>
+  <span id="updateBWMsg" style="margin-left: 10px; font-weight: bold;"></span>
+</div>
+
+<div class="update-form">
+  <h3>Cập nhật Position Size (pos_size_usdt)</h3>
+  <label for="accIndexPS">Tài khoản:</label>
+  <select id="accIndexPS">
+    {% for i in range(11) %}
+      <option value="{{ i }}">{{ accounts[i].name }} (Hiện tại: {{ accounts[i].pos_size_usdt }})</option>
+    {% endfor %}
+  </select>
+  <br>
+  <label for="newPosSizeData" style="display:block; margin-top:10px;">Nhập Pos Size mới (USDT):</label>
+  <input type="number" id="newPosSizeData" step="0.1" placeholder="Ví dụ: 5.5" style="width: 100%; font-family: monospace; margin-top: 5px; padding: 8px; border: 1px solid #ccc; border-radius: 3px; box-sizing: border-box;" />
+  <br>
+  <button type="button" class="btn-confirm" onclick="updatePosSize()" style="margin-top: 15px;">Cập nhật Pos Size</button>
+  <span id="updatePSMsg" style="margin-left: 10px; font-weight: bold;"></span>
+</div>
+
 <script>
 let currentPayload = null;
+
+function updatePosSize() {
+    const accIndex = document.getElementById("accIndexPS").value;
+    const newPosSize = document.getElementById("newPosSizeData").value;
+    const msg = document.getElementById("updatePSMsg");
+
+    if(!newPosSize.trim()) {
+        msg.style.color = "red";
+        msg.innerText = "Vui lòng nhập số Pos Size mới!";
+        return;
+    }
+
+    msg.style.color = "blue";
+    msg.innerText = "Đang tiến hành cập nhật...";
+
+    fetch("/update_pos_size", {
+        method: "POST",
+        headers: { "Accept": "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ "accIndex": accIndex, "newPosSize": newPosSize })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if(data.success) {
+            msg.style.color = "green";
+            msg.innerText = "Cập nhật thành công! Đang tải lại...";
+            setTimeout(() => location.reload(), 1000);
+        } else {
+            msg.style.color = "red";
+            msg.innerText = "Lỗi khi lưu: " + data.error;
+        }
+    })
+    .catch(err => {
+        msg.style.color = "red";
+        msg.innerText = "Lỗi kết nối máy chủ khi cập nhật!";
+        console.error(err);
+    });
+}
+
+function updateBalanceWant() {
+    const accIndex = document.getElementById("accIndexBW").value;
+    const newBalance = document.getElementById("newBalanceData").value;
+    const msg = document.getElementById("updateBWMsg");
+
+    if(!newBalance.trim()) {
+        msg.style.color = "red";
+        msg.innerText = "Vui lòng nhập số Target Balance mới!";
+        return;
+    }
+
+    msg.style.color = "blue";
+    msg.innerText = "Đang tiến hành cập nhật...";
+
+    fetch("/update_balance_want", {
+        method: "POST",
+        headers: { "Accept": "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ "accIndex": accIndex, "newBalance": newBalance })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if(data.success) {
+            msg.style.color = "green";
+            msg.innerText = "Cập nhật thành công! Đang tải lại...";
+            setTimeout(() => location.reload(), 1000);
+        } else {
+            msg.style.color = "red";
+            msg.innerText = "Lỗi khi lưu: " + data.error;
+        }
+    })
+    .catch(err => {
+        msg.style.color = "red";
+        msg.innerText = "Lỗi kết nối máy chủ khi cập nhật!";
+        console.error(err);
+    });
+}
 
 function saveTextArea() {
     const textAreaContent = document.getElementById('customInput').value;
@@ -1452,6 +1627,13 @@ def get_utc0_change(symbol, tickers):
     """Tính % biến động dựa trên mốc 0h UTC (7h sáng VN)"""
     tick = tickers.get(symbol)
     if not tick: return 999
+
+    # --- FIX LỖI: Kiểm tra an toàn giá 'last' ---
+    last_price = tick.get('last')
+    if last_price is None: 
+        return 999 # Bỏ qua token này nếu không có giá giao dịch
+    # --------------------------------------------
+
     info = tick.get('info', {})
     
     sodUtc0_raw = info.get('sodUtc0')
@@ -1791,8 +1973,8 @@ def find_and_open(exchange, direction, ref_token, pos_size_usdt, tickers, fundin
     for symbol, change in wrapped_tokens:
         # Nếu đang ở chế độ dò tịnh tiến (không phải TÀI KHOẢN TRỐNG), không được dò các token cao hơn mốc
         # Đã xử lý bằng mảng wrapped_tokens, nên nếu nó vòng lại gặp change >= ref_change thì cứ lặng lẽ bỏ qua
-        if ref_token != 'HIGHEST' and change >= ref_change: 
-            continue 
+        #if ref_token != 'HIGHEST' and change >= ref_change: 
+            #continue 
 
         token_name = extract_token(symbol)
         if token_name == ref_token: continue
@@ -2108,15 +2290,15 @@ def auto_open_positions_job():
             base_time = now.replace(minute=base_minute, second=0, microsecond=0)
 
             # --- CÀI ĐẶT THỜI GIAN DELAY THEO TỔNG LỆNH (Cộng từ mốc chuẩn) ---
-            if min_sum > 30:
-                resume_auto_open_time = base_time + timedelta(hours=2)
-                delay_msg = "2 tiếng"
-            elif min_sum > 20:
+            if min_sum > 40:
                 resume_auto_open_time = base_time + timedelta(hours=1)
                 delay_msg = "1 tiếng"
-            else: # Từ 10 đến 20 lệnh
+            elif min_sum > 30:
                 resume_auto_open_time = base_time + timedelta(minutes=30)
                 delay_msg = "30 phút"
+            else: # Từ 10 đến 20 lệnh
+                resume_auto_open_time = base_time + timedelta(minutes=15)
+                delay_msg = "15 phút"
 
                 
             #log(f"💤 Tổng={min_sum} -> Bot sẽ ngủ đông Auto Open {delay_msg} và hoạt động lại lúc {resume_auto_open_time.strftime('%H:%M:%S')}.")
@@ -2213,8 +2395,12 @@ schedule.every().minute.at(":05").do(auto_open_positions_job) # Khởi chạy h�
 schedule.every(6).minutes.at(":00").do(check_and_flip_dca)
 schedule.every().minute.at(":00").do(check_daily_18h_job)  # Thêm Task check 18h
 
+# THÊM LỆNH HẸN GIỜ BINANCE 30 PHÚT/LẦN
+schedule.every(15).minutes.do(fetch_binance_futures_balance_job)
+
 # --- THÊM LỆNH GỌI HÀM VÀO ĐÂY ---
 preload_all_account_data()
+fetch_binance_futures_balance_job() # Gọi luôn 1 lần khi khởi động bot để web có hiển thị ngay
 # ---------------------------------
 
 threading.Thread(target=run_scheduler, daemon=True).start()
@@ -2348,6 +2534,91 @@ def update_tokens():
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
 
+# === API ROUTE CẬP NHẬT BALANCE_WANT ===
+@app.route('/update_balance_want', methods=['POST'])
+def update_balance_want():
+    global previous_total_balance  # <--- Bổ sung biến global này
+    try:
+        if request.is_json:
+            data = request.get_json(silent=True)
+        else:
+            data = request.form.to_dict()
+            if not data and request.data:
+                data = json.loads(request.data.decode('utf-8'))
+
+        if not data:
+            return jsonify({"success": False, "error": "Máy chủ không nhận được dữ liệu."})
+
+        acc_idx = int(data.get('accIndex', -1))
+        new_balance_str = data.get('newBalance', '')
+
+        if acc_idx == -1 or str(new_balance_str).strip() == '':
+            return jsonify({"success": False, "error": "Thiếu Tài khoản hoặc Balance."})
+
+        new_balance = float(new_balance_str)
+
+        if new_balance < 0:
+            return jsonify({"success": False, "error": "Balance_want không được âm."})
+
+        # Cập nhật RAM
+        accounts[acc_idx]['balance_want'] = new_balance
+        
+        # --- RESET MỐC FLIP DCA ---
+        # Chặn bot hiểu nhầm hành động rút tiền/cập nhật target thành hụt vốn
+        previous_total_balance = None 
+        
+        # Lưu file
+        save_normalized_config()
+        
+        log(f"WEB UPDATE & SAVED | OKX_{acc_idx} balance_want changed to {new_balance} USDT. Reset DCA Flip reference.")
+        return jsonify({"success": True})
+
+    except ValueError:
+        return jsonify({"success": False, "error": "Giá trị nhập vào phải là số."})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
+# === API ROUTE CẬP NHẬT POS_SIZE_USDT ===
+@app.route('/update_pos_size', methods=['POST'])
+def update_pos_size():
+    try:
+        if request.is_json:
+            data = request.get_json(silent=True)
+        else:
+            data = request.form.to_dict()
+            if not data and request.data:
+                data = json.loads(request.data.decode('utf-8'))
+
+        if not data:
+            return jsonify({"success": False, "error": "Máy chủ không nhận được dữ liệu (Payload rỗng)."})
+
+        acc_idx = int(data.get('accIndex', -1))
+        new_pos_size_str = data.get('newPosSize', '')
+
+        if acc_idx == -1 or str(new_pos_size_str).strip() == '':
+            return jsonify({"success": False, "error": "Dữ liệu gửi lên bị thiếu Tài khoản hoặc Pos Size."})
+
+        # Chuyển đổi sang số thực
+        new_pos_size = float(new_pos_size_str)
+
+        if new_pos_size <= 0:
+            return jsonify({"success": False, "error": "Pos Size phải lớn hơn 0 USDT."})
+
+        # Cập nhật RAM
+        accounts[acc_idx]['pos_size_usdt'] = new_pos_size
+        
+        # Ghi đè vào file token_config.txt
+        save_normalized_config()
+        
+        log(f"WEB UPDATE & SAVED | OKX_{acc_idx} pos_size_usdt changed to {new_pos_size} USDT")
+        return jsonify({"success": True})
+
+    except ValueError:
+        return jsonify({"success": False, "error": "Giá trị nhập vào không hợp lệ (phải là số)."})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
+# === WEB ROUTES ===
 # === WEB ROUTES ===
 @app.route('/')
 def index():
@@ -2357,26 +2628,29 @@ def index():
     for i in range(11):
         sorted_token_amounts.append(get_sorted_unique_token_amounts(i))
 
-    # GỌI HÀM LẤY DATA THỤ ĐỘNG (Không gọi lại API sàn)
     total_balance_cached, total_margin_cached, passive_logs = generate_passive_stats()
-
-    # --- THÊM DÒNG NÀY: Tính toán lại tổng want động mỗi khi tải trang ---
     dynamic_total_want = sum(acc['balance_want'] for acc in accounts)
-
+    
+    # KHÔNG GỌI API BINANCE Ở ĐÂY NỮA, CHỈ ĐỌC TỪ CACHE
     return render_template_string(
         HTML_TEMPLATE,
         dca_results=dca_results,
         dca=dca,
         current_account_name=current_name,
         dca_change_history=dca_change_history,
-        total_balance_want=dynamic_total_want,  # <-- Đổi biến truyền vào ở đây
+        total_balance_want=dynamic_total_want,  
         accounts=accounts,  
         sorted_token_amounts=sorted_token_amounts,
         total_balance_cached=total_balance_cached,
         total_margin_cached=total_margin_cached,
         passive_logs=passive_logs,
-        auto_open_history=auto_open_history   # <--- Thêm dòng này vào cuối cùng
-
+        auto_open_history=auto_open_history,
+        
+        # TRUYỀN BIẾN BINANCE RA HTML
+        binance_total=binance_cache['total'],
+        binance_available=binance_cache['available'],
+        binance_used=binance_cache['used'],
+        binance_last_update=binance_cache['last_update']
     )
 
 if __name__ == '__main__':
